@@ -1,8 +1,9 @@
 package id.walt.verifier2.handlers.vpresponse
 
 import id.walt.credentials.formats.DigitalCredential
-import id.walt.verifier2.data.Verification2Session
 import id.walt.policies2.vc.CredentialPolicyResult
+import id.walt.policies2.vc.policies.PolicyExecutionContext
+import id.walt.verifier2.data.Verification2Session
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -26,23 +27,26 @@ object Verifier2SessionCredentialPolicyValidation {
 
     suspend fun validateCredentialPolicies(
         policies: Verification2Session.DefinedVerificationPolicies,
-        validatedCredentials: Map<String, List<DigitalCredential>>
+        validatedCredentials: Map<String, List<DigitalCredential>>,
+        context: PolicyExecutionContext = PolicyExecutionContext.Empty
     ): CredentialPolicyResults = coroutineScope {
 
         // --- General VC Policies ---
         val generalPolicyJobs = validatedCredentials.flatMap { (queryId, credentials) ->
-            credentials.flatMap { credential ->
+            credentials.flatMapIndexed { credentialIndex, credential ->
                 policies.vc_policies?.policies.orEmpty().map { policy ->
                     async(Dispatchers.Default) {
-                        log.trace { "Validating '$queryId' credential with policy '${policy.id}': $credential" }
-                        val result = policy.verify(credential)
-                        log.trace { "'$queryId' credential '${policy.id}' result: $result" }
+                        log.trace { "Validating '$queryId' credential#$credentialIndex with policy '${policy.id}': $credential" }
+                        val result = policy.verify(credential, context)
+                        log.trace { "'$queryId' credential#$credentialIndex '${policy.id}' result: $result" }
 
                         CredentialPolicyResult(
                             policy = policy,
                             success = result.isSuccess,
                             result = result.getOrNull(),
-                            error = result.exceptionOrNull()?.message
+                            error = result.exceptionOrNull()?.message,
+                            queryId = queryId,
+                            credentialIndex = credentialIndex,
                         )
                     }
                 }
@@ -53,16 +57,18 @@ object Verifier2SessionCredentialPolicyValidation {
         val specificPolicyJobs = policies.specific_vc_policies.orEmpty().flatMap { (queryId, queryPolicies) ->
             val credentials = validatedCredentials[queryId].orEmpty()
 
-            credentials.flatMap { specificCredential ->
+            credentials.flatMapIndexed { credentialIndex, specificCredential ->
                 queryPolicies.policies.map { policy ->
                     async(Dispatchers.Default) {
-                        val result = policy.verify(specificCredential)
+                        val result = policy.verify(specificCredential, context)
 
                         queryId to CredentialPolicyResult(
                             policy = policy,
                             success = result.isSuccess,
                             result = result.getOrNull(),
-                            error = result.exceptionOrNull()?.message
+                            error = result.exceptionOrNull()?.message,
+                            queryId = queryId,
+                            credentialIndex = credentialIndex,
                         )
                     }
                 }

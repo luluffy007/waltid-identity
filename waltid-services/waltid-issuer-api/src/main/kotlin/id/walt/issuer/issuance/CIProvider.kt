@@ -1,5 +1,4 @@
 @file:Suppress("ExtractKtorModule")
-@file:OptIn(ExperimentalTime::class)
 
 package id.walt.issuer.issuance
 
@@ -24,6 +23,7 @@ import id.walt.mdoc.dataelement.DataElement
 import id.walt.mdoc.dataelement.json.toDataElement
 import id.walt.mdoc.doc.MDocBuilder
 import id.walt.mdoc.mso.DeviceKeyInfo
+import id.walt.mdoc.mso.Status
 import id.walt.mdoc.mso.ValidityInfo
 import id.walt.oid4vc.OpenID4VC
 import id.walt.oid4vc.OpenID4VCI
@@ -62,7 +62,7 @@ import org.cose.java.OneKey
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
-import kotlin.time.ExperimentalTime
+
 
 /**
  * OIDC for Verifiable Credential Issuance service provider, implementing abstract service provider from OIDC4VC library.
@@ -80,26 +80,30 @@ open class CIProvider(
         get() = (OpenID4VCI.createDefaultProviderMetadata(
             baseUrl = baseUrl,
             credentialSupported = config.credentialConfigurationsSupported,
-            version = OpenID4VCIVersion.DRAFT13
+            version = OpenID4VCIVersion.DRAFT13,
+            issuerDisplay = ConfigManager.getConfig<CredentialTypeConfig>().issuerDisplay
         ) as OpenIDProviderMetadata.Draft13)
 
     val metadataDraft11
         get() = (OpenID4VCI.createDefaultProviderMetadata(
             baseUrl = baseUrlDraft11,
             credentialSupported = config.credentialConfigurationsSupported,
-            version = OpenID4VCIVersion.DRAFT11
+            version = OpenID4VCIVersion.DRAFT11,
+            issuerDisplay = ConfigManager.getConfig<CredentialTypeConfig>().issuerDisplay
         ) as OpenIDProviderMetadata.Draft11)
 
     val openIdMetadata
         get() = (OpenID4VCI.createDefaultProviderMetadata(
             baseUrl = baseUrl,
-            version = OpenID4VCIVersion.DRAFT13
+            version = OpenID4VCIVersion.DRAFT13,
+            issuerDisplay = ConfigManager.getConfig<CredentialTypeConfig>().issuerDisplay
         ) as OpenIDProviderMetadata.Draft13)
 
     val openIdMetadataDraft11
         get() = (OpenID4VCI.createDefaultProviderMetadata(
             baseUrl = baseUrlDraft11,
-            version = OpenID4VCIVersion.DRAFT11
+            version = OpenID4VCIVersion.DRAFT11,
+            issuerDisplay = ConfigManager.getConfig<CredentialTypeConfig>().issuerDisplay
         ) as OpenIDProviderMetadata.Draft11)
 
     companion object {
@@ -341,6 +345,7 @@ open class CIProvider(
                             DisplayProperties.fromJSON(it.jsonObject)
                         },
                         x5Chain = x5c,
+                        sdJwtCredentialClaims = request.sdJwtCredentialClaims,
                     ).also {
                         if (!issuanceSession.callbackUrl.isNullOrEmpty())
                             sendCallback(
@@ -360,8 +365,8 @@ open class CIProvider(
                         selectiveDisclosure = request.selectiveDisclosure,
                         dataMapping = request.mapping,
                         x5Chain = x5c,
-                        display = credentialRequest.display
-
+                        display = credentialRequest.display,
+                        credentialStatus = request.credentialStatus,
                     ).also {
                         if (!issuanceSession.callbackUrl.isNullOrEmpty())
                             sendCallback(
@@ -456,6 +461,8 @@ open class CIProvider(
             )
         )
 
+        val mdocIssuerStatus: Status? = request.mdocStatus?.toMdocIssuerStatusOrNull()
+
         val mdoc = MDocBuilder(
             credentialRequest.docType
                 ?: throw CredentialError(
@@ -488,7 +495,8 @@ open class CIProvider(
                 )
             ),
             cryptoProvider = cryptoProvider,
-            keyID = keyID
+            keyID = keyID,
+            status = mdocIssuerStatus,
         ).also {
             if (!issuanceSession.callbackUrl.isNullOrEmpty())
                 sendCallback(

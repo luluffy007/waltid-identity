@@ -6,7 +6,6 @@ import id.walt.idp.poc.config
 import id.walt.idp.utils.JsonUtils.toJsonObject
 import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -16,7 +15,6 @@ import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.util.*
 import kotlinx.serialization.json.*
 import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 enum class VerificationStatus {
     WAITING_FOR_SUBMISSION,
@@ -31,7 +29,7 @@ data class VerificationResultStatus(
 
 object Verifier {
 
-    private val client = HttpClient(CIO) {
+    private val client = HttpClient() {
         install(ContentNegotiation) {
             json()
         }
@@ -54,7 +52,6 @@ object Verifier {
         return Pair(presentationRequest, state)
     }
 
-    @OptIn(ExperimentalEncodingApi::class)
     /**
      * @param requestedClaims provide a map in the form of {claimName=JSON-path-to-attribute}
      */

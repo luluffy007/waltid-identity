@@ -9,16 +9,20 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             // Coroutines
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            implementation(identityLibs.kotlinx.coroutines.core)
 
             // HTTP
             implementation(identityLibs.bundles.waltid.ktor.client)
+            implementation(identityLibs.ktor.client.cio)
 
             // Logging
             implementation(identityLibs.oshai.kotlinlogging)
 
             // JSON
-            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+            implementation(identityLibs.kotlinx.serialization.json)
+
+            // Cache hashes
+            implementation(identityLibs.kotlincrypto.hash.blake2)
 
             implementation("io.github.reactivecircus.cache4k:cache4k:0.14.0")
             // For in-memory cache
@@ -28,12 +32,42 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(identityLibs.bundles.waltid.kotlintesting)
-            implementation(identityLibs.ktor.client.cio)
         }
         jvmTest.dependencies {
             implementation(identityLibs.slf4j.simple)
         }
-        jsTest.dependencies {
+
+        jvmMain.dependencies {
+            implementation(identityLibs.ktor.client.java)
+            implementation(identityLibs.ktor.client.apache5)
+            implementation(identityLibs.ktor.client.okhttp)
+            //implementation(identityLibs.ktor.client.jetty)
+        }
+
+        /* To do:
+        androidMain.dependencies {
+            implementation(identityLibs.ktor.client.android)
+            implementation(identityLibs.ktor.client.okhttp)
+        }
+         */
+
+
+        iosMain.dependencies {
+            implementation(identityLibs.ktor.client.darwin)
+        }
+        macosMain.dependencies {
+            implementation(identityLibs.ktor.client.darwin)
+        }
+
+        linuxMain.dependencies {
+            implementation(identityLibs.ktor.client.curl)
+        }
+
+        mingwMain.dependencies {
+            implementation(identityLibs.ktor.client.winhttp)
+        }
+
+        jsMain.dependencies {
             implementation(identityLibs.ktor.client.js)
         }
     }

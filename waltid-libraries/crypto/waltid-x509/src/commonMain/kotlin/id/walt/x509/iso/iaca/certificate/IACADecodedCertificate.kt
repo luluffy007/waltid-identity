@@ -1,14 +1,11 @@
-@file:OptIn(ExperimentalTime::class)
-
 package id.walt.x509.iso.iaca.certificate
 
 import id.walt.crypto.keys.Key
 import id.walt.x509.*
-import id.walt.x509.iso.blockingBridge
 import id.walt.x509.iso.IssuerAlternativeName
-import okio.ByteString
-import okio.ByteString.Companion.decodeHex
-import kotlin.time.ExperimentalTime
+import id.walt.x509.iso.blockingBridge
+import kotlinx.io.bytestring.ByteString
+import kotlinx.io.bytestring.hexToByteString
 
 /**
  * Decoded view (not validated) of an IACA X.509 certificate.
@@ -55,7 +52,7 @@ data class IACADecodedCertificate internal constructor(
         return IACACertificateInfo(
             certificate = certificate.getCertificateDer().bytes,
             serialNumber = serialNumber,
-            ski = skiHex.decodeHex(),
+            ski = skiHex.hexToByteString(),
             issuingAuthority = extras.issuingAuthority,
             issuingCountry = principalName.country,
             stateOrProvinceName = principalName.stateOrProvinceName,

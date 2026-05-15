@@ -2,16 +2,21 @@
 
 package id.walt.verifier2.handlers.vpresponse
 
+import id.walt.cose.coseCompliantCbor
 import id.walt.crypto.keys.DirectSerializedKey
 import id.walt.crypto.keys.jwk.JWKKey
 import id.walt.iso18013.annexc.AnnexCResponseVerifier
 import id.walt.iso18013.annexc.AnnexCTranscriptBuilder
+import id.walt.mdoc.objects.deviceretrieval.DeviceResponse
 import id.walt.mdoc.objects.sha256
-import id.walt.sdjwt.utils.Base64Utils.encodeToBase64Url
+import id.walt.policies2.vc.policies.PolicyExecutionContext
 import id.walt.verifier.openid.models.openid.OpenID4VPResponseMode
 import id.walt.verifier2.data.DcApiAnnexCFlowSetup
 import id.walt.verifier2.data.SessionEvent
+import id.walt.verifier2.data.SessionFailure
 import id.walt.verifier2.data.Verification2Session
+import id.walt.verifier2.data.Verification2Session.VerificationSessionStatus.FAILED
+import id.walt.verifier2.data.Verification2Session.VerificationSessionStatus.SUCCESSFUL
 import id.walt.verifier2.data.Verifier2Response
 import id.walt.verifier2.utils.JsonUtils.parseAsJsonObject
 import id.walt.verifier2.verification2.PresentationVerificationEngine
@@ -21,10 +26,13 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.encodeToHexString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.time.Clock
 
 object Verifier2VPDirectPostHandler {
 
@@ -36,6 +44,8 @@ object Verifier2VPDirectPostHandler {
         session: Verification2Session,
         ephemeralDecryptionKey: DirectSerializedKey?
     ): Pair<String, String?> = when (responseData) {
+        is ErrorResponseDirectPost -> error("Wallet error responses must be handled before parsing vp_token data")
+
         is DcApiJsonDirectPostResponse -> {
             if (session.setup is DcApiAnnexCFlowSetup) {
                 // Annex C handling
@@ -60,8 +70,13 @@ object Verifier2VPDirectPostHandler {
                         ?: error("Missing ephemeral decryption key for Annex C")
                 )
 
-                val virtualVpToken = mapOf("annex_c" to listOf(plaintext.encodeToBase64Url()))
-                //val deviceResponse = coseCompliantCbor.decodeFromByteArray<DeviceResponse>(plaintext)
+                val deviceResponse = coseCompliantCbor.decodeFromByteArray<DeviceResponse>(plaintext)
+                requireNotNull(deviceResponse.documents) { "Missing 'documents' in DeviceResponse!" }
+
+                val virtualVpToken = deviceResponse.documents!!
+                    .groupBy { it.docType }
+                    .mapValues { (_, docs) -> docs.map { doc -> coseCompliantCbor.encodeToHexString(doc) } }
+
                 //require("1.0" == deviceResponse.version)
                 //require(0u == deviceResponse.status)
                 //println("Device response: $deviceResponse")
@@ -141,7 +156,16 @@ object Verifier2VPDirectPostHandler {
                 log.trace { "Verification session data - body: $bodyText" }
                 val bodyJsonObject = bodyText.parseAsJsonObject("Could not parse provided body text as JSON object for DC API flow")
 
-                DcApiJsonDirectPostResponse(bodyJsonObject)
+                val errorCode = bodyJsonObject["error"]?.jsonPrimitive?.content
+                if (errorCode != null) {
+                    ErrorResponseDirectPost(
+                        error = errorCode,
+                        errorDescription = bodyJsonObject["error_description"]?.jsonPrimitive?.content,
+                        state = bodyJsonObject["state"]?.jsonPrimitive?.content,
+                    )
+                } else {
+                    DcApiJsonDirectPostResponse(bodyJsonObject)
+                }
             }
 
             else -> {
@@ -149,10 +173,17 @@ object Verifier2VPDirectPostHandler {
                 val responseString = urlParameters["response"]
                 val vpTokenString = urlParameters["vp_token"]
                 val receivedState = urlParameters["state"]
+                val errorCode = urlParameters["error"]
 
-                log.trace { "Verification session data: state = $receivedState, vp_token = $vpTokenString, response = $responseString" }
+                log.trace { "Verification session data: state = $receivedState, vp_token = $vpTokenString, response = $responseString, error = $errorCode" }
 
                 when {
+                    errorCode != null -> ErrorResponseDirectPost(
+                        error = errorCode,
+                        errorDescription = urlParameters["error_description"],
+                        state = receivedState,
+                    )
+
                     responseString != null -> EncryptedResponseStringDirectPostResponse(
                         responseParameter = responseString
                     )
@@ -172,6 +203,7 @@ object Verifier2VPDirectPostHandler {
         verificationSession: Verification2Session?,
         updateSessionCallback: suspend (session: Verification2Session, event: SessionEvent, block: Verification2Session.() -> Unit) -> Unit,
         failSessionCallback: suspend (session: Verification2Session, event: SessionEvent, updateSession: suspend (Verification2Session, SessionEvent, block: Verification2Session.() -> Unit) -> Unit) -> Unit,
+        policyContext: PolicyExecutionContext = PolicyExecutionContext.Empty,
     ) {
         val call = this
 
@@ -179,11 +211,18 @@ object Verifier2VPDirectPostHandler {
             Verifier2Response.Verifier2Error.UNKNOWN_VERIFICATION_SESSION.throwAsError()
         }
 
+        verificationSession.expirationDate?.let { expirationDate ->
+            if (expirationDate < Clock.System.now()) {
+                Verifier2Response.Verifier2Error.EXPIRED_VERIFICATION_SESSION.throwAsError()
+            }
+        }
+
         val result = handleDirectPost(
             verificationSession = verificationSession,
             responseData = call.parseHttpRequestToDirectPostResponse(),
             updateSessionCallback = updateSessionCallback,
-            failSessionCallback = failSessionCallback
+            failSessionCallback = failSessionCallback,
+            policyContext = policyContext
         )
 
         call.respond(
@@ -207,6 +246,19 @@ object Verifier2VPDirectPostHandler {
     data class CleartextDirectPostResponse(val vpToken: String, val state: String) : DirectPostResponse
 
     /**
+     * OpenID4VP 1.0 §8.5 error response. Wallet rejects the presentation request (e.g. user
+     * decline → `access_denied`). Body may arrive url-encoded or as JSON and always carries at
+     * least an `error` code; `error_description` is optional. `state` is required whenever the
+     * Authorization Request included `state` — [handleDirectPost] rejects mismatched / absent
+     * state with `INVALID_STATE_PARAMETER` in that case.
+     */
+    data class ErrorResponseDirectPost(
+        val error: String,
+        val errorDescription: String?,
+        val state: String?,
+    ) : DirectPostResponse
+
+    /**
      * Here the receiving of credentials through the Verifiers endpoints
      * (e.g. direct_post endpoint) is handled
      */
@@ -215,6 +267,7 @@ object Verifier2VPDirectPostHandler {
         responseData: DirectPostResponse,
         updateSessionCallback: suspend (session: Verification2Session, event: SessionEvent, block: Verification2Session.() -> Unit) -> Unit,
         failSessionCallback: suspend (session: Verification2Session, event: SessionEvent, updateSession: suspend (Verification2Session, SessionEvent, block: Verification2Session.() -> Unit) -> Unit) -> Unit,
+        policyContext: PolicyExecutionContext = PolicyExecutionContext.Empty,
     ): Map<String, String> {
         suspend fun Verification2Session.updateSession(event: SessionEvent, block: Verification2Session.() -> Unit) =
             updateSessionCallback.invoke(this, event, block)
@@ -227,6 +280,10 @@ object Verifier2VPDirectPostHandler {
         val session = verificationSession
         val responseMode = session.authorizationRequest.responseMode
         val isAnnexC = verificationSession.setup is DcApiAnnexCFlowSetup
+
+        if (responseData is ErrorResponseDirectPost) {
+            return handleWalletErrorResponse(session, responseData, updateSessionCallback)
+        }
 
         val (vpTokenString, receivedState) = parseResponseBody(
             responseMode = responseMode,
@@ -255,7 +312,13 @@ object Verifier2VPDirectPostHandler {
         // presented credential/presentation
 
 
-        PresentationVerificationEngine.executeAllVerification(vpTokenContents, session, updateSessionCallback, failSessionCallback)
+        PresentationVerificationEngine.executeAllVerification(
+            vpTokenContents,
+            session,
+            updateSessionCallback,
+            failSessionCallback,
+            policyContext
+        )
 
 
         val optionalSuccessRedirectUrl = session.redirects?.successRedirectUri
@@ -281,5 +344,51 @@ object Verifier2VPDirectPostHandler {
         Verifier2Response.Verifier2Error.MALFORMED_VP_TOKEN.throwAsError()
     }
 
+    /**
+     * Handles an OID4VP 1.0 §8.5 wallet error response. Validates `state` echo, marks the
+     * session as `FAILED` with a structured [SessionFailure.WalletErrorResponse], and emits
+     * [SessionEvent.wallet_error_response_received].
+     *
+     * Idempotent: if the session is already in a terminal state, the response is acknowledged
+     * without overwriting any existing outcome.
+     */
+    private suspend fun handleWalletErrorResponse(
+        session: Verification2Session,
+        responseData: ErrorResponseDirectPost,
+        updateSessionCallback: suspend (session: Verification2Session, event: SessionEvent, block: Verification2Session.() -> Unit) -> Unit,
+    ): Map<String, String> {
+        log.info { "Wallet returned OID4VP §8.5 error for session ${session.id}: error=${responseData.error}" }
+
+        session.authorizationRequest.state
+            ?.takeIf { it != responseData.state }
+            ?.let { Verifier2Response.Verifier2Error.INVALID_STATE_PARAMETER.throwAsError() }
+
+        if (session.status == SUCCESSFUL || session.status == FAILED) {
+            log.info { "Session ${session.id} already terminal (${session.status}); ignoring wallet error." }
+            return mapOf(
+                "status" to "acknowledged",
+                "message" to "Session already terminal; wallet error response ignored.",
+            )
+        }
+
+        updateSessionCallback(session, SessionEvent.wallet_error_response_received) {
+            attempted = true
+            status = FAILED
+            statusReason = "Wallet returned OID4VP error: ${responseData.error}"
+            failure = SessionFailure.WalletErrorResponse(
+                reason = "Wallet returned OID4VP error response per §8.5",
+                error = responseData.error,
+                errorDescription = responseData.errorDescription,
+                state = responseData.state,
+            )
+        }
+
+        return session.redirects?.errorRedirectUri
+            ?.let { mapOf("redirect_uri" to it) }
+            ?: mapOf(
+                "status" to "acknowledged",
+                "message" to "Wallet error response recorded.",
+            )
+    }
 
 }

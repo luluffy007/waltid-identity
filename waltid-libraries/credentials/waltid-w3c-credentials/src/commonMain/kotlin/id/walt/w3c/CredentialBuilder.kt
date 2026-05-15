@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalTime::class)
-
 package id.walt.w3c
 
 import id.walt.crypto.utils.UuidUtils.randomUUID
@@ -9,6 +7,8 @@ import id.walt.w3c.vc.vcs.W3CBaseDataModels
 import id.walt.w3c.vc.vcs.W3CV11DataModel
 import id.walt.w3c.vc.vcs.W3CV2DataModel
 import id.walt.w3c.vc.vcs.W3CVC
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -17,17 +17,19 @@ import kotlin.js.JsExport
 import kotlin.js.JsName
 import kotlin.time.Clock
 import kotlin.time.Duration
-import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 
 @OptIn(ExperimentalJsExport::class)
 @JsExport
+@Serializable
 enum class CredentialBuilderType {
     /** W3C Verifiable Credential version 1.1 */
+    @SerialName("W3CV11")
     W3CV11CredentialBuilder,
 
     /** W3C Verifiable Credential version 2.0 */
+    @SerialName("W3CV2")
     W3CV2CredentialBuilder,
 
     MdocsCredentialBuilder // TODO

@@ -1,17 +1,14 @@
-@file:OptIn(ExperimentalTime::class)
-
 package id.walt.x509.iso.iaca
 
 import id.walt.x509.iso.IsoSharedTestHarnessValidResources
 import id.walt.x509.iso.iaca.certificate.toJcaX500Name
 import id.walt.x509.toJcaX509Certificate
 import kotlinx.coroutines.test.runTest
-import okio.ByteString.Companion.decodeHex
-import okio.ByteString.Companion.toByteString
+import kotlinx.io.bytestring.ByteString
+import kotlinx.io.bytestring.hexToByteString
 import org.bouncycastle.cert.jcajce.JcaX500NameUtil
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.time.ExperimentalTime
 
 class IACACertificateInfoTest {
 
@@ -43,7 +40,7 @@ class IACACertificateInfoTest {
             actual = infoSuspend.serialNumber,
         )
         assertEquals(
-            expected = decodedCertificate.skiHex.decodeHex(),
+            expected = decodedCertificate.skiHex.hexToByteString(),
             actual = infoSuspend.ski,
         )
         assertEquals(
@@ -72,11 +69,11 @@ class IACACertificateInfoTest {
         val subject = requireNotNull(infoSuspend.subject)
 
         assertEquals(
-            expected = JcaX500NameUtil.getIssuer(certificate).encoded.toByteString(),
+            expected = ByteString(JcaX500NameUtil.getIssuer(certificate).encoded),
             actual = issuer,
         )
         assertEquals(
-            expected = JcaX500NameUtil.getSubject(certificate).encoded.toByteString(),
+            expected = ByteString(JcaX500NameUtil.getSubject(certificate).encoded),
             actual = subject,
         )
     }

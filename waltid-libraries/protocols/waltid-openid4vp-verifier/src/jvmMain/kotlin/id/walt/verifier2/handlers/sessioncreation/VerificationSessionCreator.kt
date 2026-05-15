@@ -1,6 +1,6 @@
 package id.walt.verifier2.handlers.sessioncreation
 
-import id.walt.cose.Cose
+import id.walt.cose.*
 import id.walt.cose.JWKKeyCoseTransform.getCosePublicKey
 import id.walt.crypto.keys.DirectSerializedKey
 import id.walt.crypto.keys.Key
@@ -8,9 +8,13 @@ import id.walt.crypto.keys.KeyType
 import id.walt.crypto.keys.jwk.JWKKey
 import id.walt.crypto.utils.JsonUtils.toJsonElement
 import id.walt.iso18013.annexc.AnnexC
+import id.walt.iso18013.annexc.AnnexCTranscriptBuilder
 import id.walt.iso18013.annexc.protocol.AnnexCRequestResponse
+import id.walt.mdoc.encoding.ByteStringWrapper
 import id.walt.mdoc.objects.dcapi.DCAPIEncryptionInfo
 import id.walt.mdoc.objects.deviceretrieval.DeviceRequest
+import id.walt.mdoc.objects.deviceretrieval.DeviceRequestInfo
+import id.walt.mdoc.objects.deviceretrieval.UseCase
 import id.walt.policies2.vc.VCPolicyList
 import id.walt.policies2.vc.policies.CredentialSignaturePolicy
 import id.walt.policies2.vp.policies.VPPolicyList
@@ -20,28 +24,32 @@ import id.walt.verifier.openid.models.authorization.ClientMetadata
 import id.walt.verifier.openid.models.openid.OpenID4VPResponseMode
 import id.walt.verifier.openid.models.openid.OpenID4VPResponseType
 import id.walt.verifier2.data.*
+import id.walt.verifier2.handlers.sessioncreation.annexc.ReaderAuthentication
+import id.walt.verifier2.handlers.sessioncreation.annexc.ReaderAuthenticationAll
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.*
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.plus
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.json.*
+import kotlin.io.encoding.Base64
 import kotlin.time.Clock
-import kotlin.time.ExperimentalTime
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
-@OptIn(ExperimentalUuidApi::class, ExperimentalTime::class, ExperimentalSerializationApi::class)
+@OptIn(ExperimentalUuidApi::class, ExperimentalSerializationApi::class)
 object VerificationSessionCreator {
 
     private val log = KotlinLogging.logger { }
 
-    private suspend fun getKid(clientId: String, key: Key): String {
+    private suspend fun getKid(clientId: String?, key: Key): String {
         val prefix = "decentralized_identifier:"
         val keyId = key.getKeyId()
 
-        return clientId.takeIf { it.startsWith(prefix) }
+        return clientId
+            ?.takeIf { it.startsWith(prefix) && it.substringAfter(prefix).isNotBlank() }
             ?.let { "${it.substringAfter(prefix)}#$keyId" }
             ?: keyId
     }
@@ -49,7 +57,7 @@ object VerificationSessionCreator {
     suspend fun createVerificationSession(
         setup: VerificationSessionSetup,
 
-        clientId: String,
+        clientId: String?,
         clientMetadata: ClientMetadata? = null,
 
         /** Is used to build request URL and response URL */
@@ -71,16 +79,19 @@ object VerificationSessionCreator {
         val isSignedRequest = setup.core.signedRequest
         val isEncryptedResponse = setup.core.encryptedResponse || isAnnexC
         val isCrossDevice = setup is CrossDeviceFlowSetup
-        val isDcApi = setup is DcApiFlowSetup || isAnnexC
-        val isDcApiHaip = isDcApi && (setup is DcApiFlowSetup && setup.haip)
+        val isDcApi = setup is DcApiAnnexDFlowSetup || isAnnexC
+        val isDcApiHaip = isDcApi && (setup is DcApiAnnexDFlowSetup && setup.haip)
         val origins =
-            if (setup is DcApiFlowSetup) setup.expectedOrigins else if (setup is DcApiAnnexCFlowSetup) listOf(setup.origin) else null
+            if (setup is DcApiAnnexDFlowSetup) setup.expectedOrigins else if (setup is DcApiAnnexCFlowSetup) listOf(setup.origin) else null
 
         var ephemeralKey: JWKKey? = null
 
         if (isDcApi) {
             require(urlPrefix == null) { "URL prefix is not used for DC API" }
             require(!urlHost.startsWith("openid4vp://authorize")) { "URL Host has to be set to the DC API origin" }
+            if (isSignedRequest && !isAnnexC) {
+                require(!clientId.isNullOrBlank()) { "Signed DC API requests require non-empty client_id" }
+            }
         }
 
         val effectiveClientMetadata = if (isDcApi && isEncryptedResponse) {
@@ -133,7 +144,7 @@ object VerificationSessionCreator {
                 // Ensure vp_formats_supported includes mso_mdoc for HAIP
                 vpFormatsSupported = baseMetadata.vpFormatsSupported ?: mapOf(
                     "mso_mdoc" to JsonObject(
-                         mapOf(
+                        mapOf(
                             "issuerauth_alg_values" to JsonArray(listOf(Cose.Algorithm.ES256, -9, -50).map { it.toJsonElement() }),
                             "deviceauth_alg_values" to JsonArray(listOf(Cose.Algorithm.ES256, -9, -50, -65537).map { it.toJsonElement() })
                         )
@@ -222,7 +233,7 @@ object VerificationSessionCreator {
              * containing details about the transaction the Verifier is requesting the End-User to authorize.
              * The decoded JSON object structure is represented by [TransactionDataItem].
              */
-            //val transactionData : List < String >? = null, // List of base64url encoded JSON strings
+            transactionData = if (setup is OpenID4VP1FlowSetup) setup.openid?.transactionData else null, // List of base64url encoded JSON strings
 
             /*
              * OPTIONAL. An array of attestations about the Verifier relevant to the Credential Request.
@@ -251,7 +262,7 @@ object VerificationSessionCreator {
         val bootstrapAuthorizationRequestUrl = bootstrapAuthorizationRequest?.toHttpUrl(URLBuilder(urlHost))
 
         val now = Clock.System.now()
-        val expiration = now.plus(5, DateTimeUnit.MINUTE, TimeZone.UTC)
+        val expiration = setup.core.expirationDate
         val retentionDate = now.plus(10, DateTimeUnit.YEAR, TimeZone.UTC)
 
         val signedAuthorizationRequest = if (isSignedRequest) {
@@ -282,14 +293,103 @@ object VerificationSessionCreator {
 
         val customData = when {
             isAnnexC -> {
+
+                val encryptionInfoObj = DCAPIEncryptionInfo(
+                    nonce = nonce.toByteArray(),
+                    recipientPublicKey = ephemeralKey?.getCosePublicKey()
+                        ?: error("Missing ephemeral key for Annex C verification")
+                )
+                val encryptionInfoB64 = encryptionInfoObj.encodeToBase64Url()
+
+
+                val deviceRequest = if (isSignedRequest) {
+                    // --- Reader authentication
+
+                    requireNotNull(key) { "Signing key is required for signed Annex C requests" }
+                    require(!x5c.isNullOrEmpty()) { "x5c is required for signed Annex C requests" }
+
+                    // Build the DC API Session Transcript
+                    val sessionTranscript = AnnexCTranscriptBuilder.buildSessionTranscript(
+                        encryptionInfoB64 = encryptionInfoB64,
+                        origin = setup.origin
+                    )
+
+                    // Prepare the base request without signatures
+                    val initialDeviceRequest = DeviceRequest(setup.requestedElements)
+
+                    // Create the DeviceRequestInfo (Use Cases)
+                    // By grouping all indices into a single documentSet, we make ALL requested documents mandatory.
+                    val deviceRequestInfo = ByteStringWrapper(
+                        DeviceRequestInfo(
+                            useCases = listOf(
+                                UseCase(
+                                    mandatory = true,
+                                    documentSets = listOf(initialDeviceRequest.docRequests.indices.map { it.toUInt() })
+                                )
+                            )
+                        )
+                    )
+
+                    // cryptography setup for both signature types
+                    val coseSigner = key.toCoseSigner()
+                    val x5cByteArrays = x5c.map { Base64.decode(it) }
+                    val protectedHeaders = CoseHeaders(algorithm = key.keyType.toCoseAlgorithm())
+                    val unprotectedHeaders = CoseHeaders(x5chain = x5cByteArrays.map { CoseCertificate(it) })
+
+                    // Generate readerAuth for EACH document requested (Per-Document Signature)
+                    val signedDocRequests = initialDeviceRequest.docRequests.map { docReq ->
+                        val itemsRequestBytes = docReq.itemsRequest.serialized
+
+                        val readerAuthPayload = ReaderAuthentication(
+                            context = ReaderAuthentication.CONTEXT,
+                            sessionTranscript = sessionTranscript,
+                            itemsRequestBytes = itemsRequestBytes
+                        )
+
+                        val readerAuthSignature = CoseSign1.createAndSignDetached(
+                            protectedHeaders = protectedHeaders,
+                            unprotectedHeaders = unprotectedHeaders,
+                            detachedPayload = coseCompliantCbor.encodeToByteArray(readerAuthPayload),
+                            signer = coseSigner
+                        )
+
+                        // Attach the signature to this specific document request
+                        docReq.copy(readerAuth = readerAuthSignature)
+                    }
+
+                    // Generate readerAuthAll for the entire set (Global Signature)
+                    val itemsRequestBytesAll = initialDeviceRequest.docRequests.map { it.itemsRequest.serialized }
+
+                    val readerAuthAllPayload = ReaderAuthenticationAll(
+                        context = ReaderAuthenticationAll.CONTEXT,
+                        sessionTranscript = sessionTranscript,
+                        itemsRequestBytesAll = itemsRequestBytesAll,
+                        docRequestsInfoBytes = deviceRequestInfo.serialized
+                    )
+
+                    val readerAuthAllSignature = CoseSign1.createAndSignDetached(
+                        protectedHeaders = protectedHeaders,
+                        unprotectedHeaders = unprotectedHeaders,
+                        detachedPayload = coseCompliantCbor.encodeToByteArray(readerAuthAllPayload),
+                        signer = coseSigner
+                    )
+
+                    // Assemble final request
+                    DeviceRequest(
+                        version = DeviceRequest.VERSION_WITH_SIGNING,
+                        docRequests = signedDocRequests,
+                        deviceRequestInfo = deviceRequestInfo,
+                        readerAuthAll = listOf(readerAuthAllSignature)
+                    )
+                } else {
+                    DeviceRequest(setup.requestedElements).copy(version = DeviceRequest.VERSION)
+                }
+
                 AnnexCRequestResponse(
                     protocol = AnnexC.PROTOCOL,
                     data = AnnexCRequestResponse.Data(
-                        deviceRequest = DeviceRequest(setup.docType, setup.requestedElements).encodeToBase64Url(),
-                        encryptionInfo = DCAPIEncryptionInfo(
-                            nonce.toByteArray(),
-                            recipientPublicKey = ephemeralKey?.getCosePublicKey() ?: error("Missing ephermal key for Annex C verification")
-                        ).encodeToBase64Url()
+                        deviceRequest = deviceRequest.encodeToBase64Url(),
+                        encryptionInfo = encryptionInfoB64
                     )
                 )
             }
@@ -307,7 +407,8 @@ object VerificationSessionCreator {
             expirationDate = expiration,
             retentionDate = retentionDate,
 
-            status = if (expiration != null) Verification2Session.VerificationSessionStatus.UNUSED else Verification2Session.VerificationSessionStatus.ACTIVE,
+            //status = if (expiration != null) Verification2Session.VerificationSessionStatus.UNUSED else Verification2Session.VerificationSessionStatus.ACTIVE,
+            status = Verification2Session.VerificationSessionStatus.UNUSED,
 
             bootstrapAuthorizationRequest = if (!isAnnexC) bootstrapAuthorizationRequest else null,
             bootstrapAuthorizationRequestUrl = if (!isAnnexC) bootstrapAuthorizationRequestUrl else null,

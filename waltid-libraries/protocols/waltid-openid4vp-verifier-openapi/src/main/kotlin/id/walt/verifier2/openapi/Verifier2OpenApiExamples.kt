@@ -8,33 +8,18 @@ import id.walt.dcql.models.meta.JwtVcJsonMeta
 import id.walt.dcql.models.meta.MsoMdocMeta
 import id.walt.dcql.models.meta.NoMeta
 import id.walt.dcql.models.meta.SdJwtVcMeta
+import id.walt.policies2.vc.VCPolicyList
+import id.walt.policies2.vc.policies.*
+import id.walt.policies2.vc.policies.status.Values
+import id.walt.policies2.vc.policies.status.model.IETFStatusPolicyAttribute
+import id.walt.policies2.vc.policies.status.model.W3CStatusPolicyAttribute
+import id.walt.policies2.vc.policies.status.model.W3CStatusPolicyListArguments
+import id.walt.policies2.vp.policies.*
 import id.walt.verifier2.data.CrossDeviceFlowSetup
 import id.walt.verifier2.data.GeneralFlowConfig
 import id.walt.verifier2.data.UrlConfig
 import id.walt.verifier2.data.Verification2Session
 import id.walt.verifier2.data.Verification2Session.DefinedVerificationPolicies
-import id.walt.policies2.vc.VCPolicyList
-import id.walt.policies2.vc.policies.AllowedIssuerPolicy
-import id.walt.policies2.vc.policies.RegexPolicy
-import id.walt.policies2.vc.policies.CredentialSignaturePolicy
-import id.walt.policies2.vc.policies.ExpirationDatePolicy
-import id.walt.policies2.vc.policies.NotBeforePolicy
-import id.walt.policies2.vc.policies.RevocationPolicy
-import id.walt.policies2.vc.policies.StatusPolicy
-import id.walt.policies2.vc.policies.VicalPolicy
-import id.walt.policies2.vc.policies.WebhookPolicy
-import id.walt.policies2.vc.policies.status.Values
-import id.walt.policies2.vc.policies.status.model.IETFStatusPolicyAttribute
-import id.walt.policies2.vc.policies.status.model.W3CStatusPolicyAttribute
-import id.walt.policies2.vc.policies.status.model.W3CStatusPolicyListArguments
-import id.walt.policies2.vp.policies.AudienceCheckJwtVcJsonVPPolicy
-import id.walt.policies2.vp.policies.AudienceCheckSdJwtVPPolicy
-import id.walt.policies2.vp.policies.KbJwtSignatureSdJwtVPPolicy
-import id.walt.policies2.vp.policies.NonceCheckJwtVcJsonVPPolicy
-import id.walt.policies2.vp.policies.NonceCheckSdJwtVPPolicy
-import id.walt.policies2.vp.policies.SdHashCheckSdJwtVPPolicy
-import id.walt.policies2.vp.policies.SignatureJwtVcJsonVPPolicy
-import id.walt.policies2.vp.policies.VPPolicyList
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -51,7 +36,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -70,7 +55,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -92,18 +77,19 @@ object Verifier2OpenApiExamples {
         )
     )
 
-    val openid4vpHttpW3cVcCredentialStatusTokenStatusList = CrossDeviceFlowSetup(
+    val openid4vpHttpMdocCredentialStatusTokenStatusList = CrossDeviceFlowSetup(
         core = GeneralFlowConfig(
             DcqlQuery(
                 credentials = listOf(
                     CredentialQuery(
-                        id = "example_openbadge_jwt_vc",
-                        format = CredentialFormat.JWT_VC_JSON,
-                        meta = JwtVcJsonMeta(
-                            typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
+                        id = "example_mdl",
+                        format = CredentialFormat.MSO_MDOC,
+                        meta = MsoMdocMeta(
+                            doctypeValue = "org.iso.18013.5.1.mDL"
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "family_name")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "given_name"))
                         )
                     )
                 )
@@ -114,6 +100,37 @@ object Verifier2OpenApiExamples {
                         StatusPolicy(
                             argument = IETFStatusPolicyAttribute(
                                 value = 0u
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+    val openid4vpHttpMdocCredentialStatusTokenStatusListMultipleValues = CrossDeviceFlowSetup(
+        core = GeneralFlowConfig(
+            DcqlQuery(
+                credentials = listOf(
+                    CredentialQuery(
+                        id = "example_mdl",
+                        format = CredentialFormat.MSO_MDOC,
+                        meta = MsoMdocMeta(
+                            doctypeValue = "org.iso.18013.5.1.mDL"
+                        ),
+                        claims = listOf(
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "family_name")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "given_name"))
+                        )
+                    )
+                )
+            ),
+            policies = DefinedVerificationPolicies(
+                vc_policies = VCPolicyList(
+                    listOf(
+                        StatusPolicy(
+                            argument = IETFStatusPolicyAttribute(
+                                values = listOf(0u, 1u)
                             )
                         )
                     )
@@ -133,7 +150,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -144,6 +161,38 @@ object Verifier2OpenApiExamples {
                         StatusPolicy(
                             argument = W3CStatusPolicyAttribute(
                                 value = 0u,
+                                purpose = "Revocation",
+                                type = Values.BITSTRING_STATUS_LIST
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+    val openid4vpHttpW3cVcCredentialStatusBitstringStatusListMultipleValues = CrossDeviceFlowSetup(
+        core = GeneralFlowConfig(
+            DcqlQuery(
+                credentials = listOf(
+                    CredentialQuery(
+                        id = "example_openbadge_jwt_vc",
+                        format = CredentialFormat.JWT_VC_JSON,
+                        meta = JwtVcJsonMeta(
+                            typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
+                        ),
+                        claims = listOf(
+                            ClaimsQuery(pathStrings = listOf("name"))
+                        )
+                    )
+                )
+            ),
+            policies = DefinedVerificationPolicies(
+                vc_policies = VCPolicyList(
+                    listOf(
+                        StatusPolicy(
+                            argument = W3CStatusPolicyAttribute(
+                                values = listOf(0u, 1u),
                                 purpose = "Revocation",
                                 type = Values.BITSTRING_STATUS_LIST
                             )
@@ -165,7 +214,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -206,7 +255,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -232,7 +281,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -260,9 +309,9 @@ object Verifier2OpenApiExamples {
                         id = "pid", format = CredentialFormat.DC_SD_JWT, meta = SdJwtVcMeta(
                             vctValues = listOf("http://waltid.enterprise.localhost:3000/v1/waltid.issuer/issuer-service-api/openid4vc/draft13/identity_credential")
                         ), claims = listOf(
-                            ClaimsQuery(path = listOf("given_name")),
-                            ClaimsQuery(path = listOf("family_name")),
-                            ClaimsQuery(path = listOf("address", "street_address"))
+                            ClaimsQuery(pathStrings = listOf("given_name")),
+                            ClaimsQuery(pathStrings = listOf("family_name")),
+                            ClaimsQuery(pathStrings = listOf("address", "street_address"))
                         )
                     )
                 )
@@ -278,9 +327,9 @@ object Verifier2OpenApiExamples {
                         id = "pid", format = CredentialFormat.DC_SD_JWT, meta = SdJwtVcMeta(
                             vctValues = listOf("http://waltid.enterprise.localhost:3000/v1/waltid.issuer/issuer-service-api/openid4vc/draft13/identity_credential")
                         ), claims = listOf(
-                            ClaimsQuery(path = listOf("given_name")),
-                            ClaimsQuery(path = listOf("family_name")),
-                            ClaimsQuery(path = listOf("address", "street_address"))
+                            ClaimsQuery(pathStrings = listOf("given_name")),
+                            ClaimsQuery(pathStrings = listOf("family_name")),
+                            ClaimsQuery(pathStrings = listOf("address", "street_address"))
                         )
                     )
                 )
@@ -310,9 +359,9 @@ object Verifier2OpenApiExamples {
                         id = "pid", format = CredentialFormat.DC_SD_JWT, meta = SdJwtVcMeta(
                             vctValues = listOf("http://waltid.enterprise.localhost:3000/v1/waltid.issuer/issuer-service-api/openid4vc/draft13/identity_credential")
                         ), claims = listOf(
-                            ClaimsQuery(path = listOf("given_name")),
-                            ClaimsQuery(path = listOf("family_name")),
-                            ClaimsQuery(path = listOf("address", "street_address"))
+                            ClaimsQuery(pathStrings = listOf("given_name")),
+                            ClaimsQuery(pathStrings = listOf("family_name")),
+                            ClaimsQuery(pathStrings = listOf("address", "street_address"))
                         )
                     )
                 )
@@ -320,10 +369,12 @@ object Verifier2OpenApiExamples {
             policies = DefinedVerificationPolicies(
                 vp_policies = VPPolicyList(
                     jwtVcJson = listOf(),
-                    dcSdJwt = listOf(AudienceCheckSdJwtVPPolicy(),
+                    dcSdJwt = listOf(
+                        AudienceCheckSdJwtVPPolicy(),
                         KbJwtSignatureSdJwtVPPolicy(),
                         NonceCheckSdJwtVPPolicy(),
-                        SdHashCheckSdJwtVPPolicy()),
+                        SdHashCheckSdJwtVPPolicy()
+                    ),
                     msoMdoc = listOf()
                 )
             )
@@ -331,6 +382,32 @@ object Verifier2OpenApiExamples {
     )
 
     // ISO Examples
+
+    val openid4vpHttpIsoPhotoIdMinimal = CrossDeviceFlowSetup(
+        core = GeneralFlowConfig(
+            dcqlQuery = DcqlQuery(
+                credentials = listOf(
+                    CredentialQuery(
+                        id = "my_photoid",
+                        format = CredentialFormat.MSO_MDOC,
+                        meta = MsoMdocMeta(
+                            doctypeValue = "org.iso.23220.photoid.1"
+                        ),
+                        claims = listOf(
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "family_name_unicode")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "given_name_unicode")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "issuing_authority_unicode")),
+                            ClaimsQuery(
+                                pathStrings = listOf("org.iso.18013.5.1", "issuing_country"),
+                                values = listOf("AT").map { JsonPrimitive(it) }
+                            ),
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.photoid.1", "travel_document_number"))
+                        )
+                    )
+                )
+            )
+        )
+    )
 
 
     val openid4vpHttpIsoPhotoIdVical = CrossDeviceFlowSetup(
@@ -344,23 +421,23 @@ object Verifier2OpenApiExamples {
                             doctypeValue = "org.iso.23220.photoid.1"
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("org.iso.18013.5.1", "family_name_unicode")),
-                            ClaimsQuery(path = listOf("org.iso.18013.5.1", "given_name_unicode")),
-                            ClaimsQuery(path = listOf("org.iso.18013.5.1", "issuing_authority_unicode")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "family_name_unicode")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "given_name_unicode")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "issuing_authority_unicode")),
                             ClaimsQuery(
-                                path = listOf("org.iso.18013.5.1", "resident_postal_code"),
+                                pathStrings = listOf("org.iso.18013.5.1", "resident_postal_code"),
                                 values = listOf(1180, 1190, 1200, 1210).map { JsonPrimitive(it) }
                             ),
                             ClaimsQuery(
-                                path = listOf("org.iso.18013.5.1", "issuing_country"),
+                                pathStrings = listOf("org.iso.18013.5.1", "issuing_country"),
                                 values = listOf("AT").map { JsonPrimitive(it) }
                             ),
-                            ClaimsQuery(path = listOf("org.iso.23220.photoid.1", "person_id")),
-                            ClaimsQuery(path = listOf("org.iso.23220.photoid.1", "resident_street")),
-                            ClaimsQuery(path = listOf("org.iso.23220.photoid.1", "administrative_number")),
-                            ClaimsQuery(path = listOf("org.iso.23220.photoid.1", "travel_document_number")),
-                            ClaimsQuery(path = listOf("org.iso.23220.dtc.1", "dtc_version")),
-                            ClaimsQuery(path = listOf("org.iso.23220.dtc.1", "dtc_dg1"))
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.photoid.1", "person_id")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.photoid.1", "resident_street")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.photoid.1", "administrative_number")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.photoid.1", "travel_document_number")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.dtc.1", "dtc_version")),
+                            ClaimsQuery(pathStrings = listOf("org.iso.23220.dtc.1", "dtc_dg1"))
                         )
                     )
                 )
@@ -393,9 +470,9 @@ object Verifier2OpenApiExamples {
                         id = "pid", format = CredentialFormat.DC_SD_JWT, meta = SdJwtVcMeta(
                             vctValues = listOf("http://waltid.enterprise.localhost:3000/v1/waltid.issuer/issuer-service-api/openid4vc/draft13/identity_credential")
                         ), claims = listOf(
-                            ClaimsQuery(path = listOf("given_name")),
-                            ClaimsQuery(path = listOf("family_name")),
-                            ClaimsQuery(path = listOf("address", "street_address"))
+                            ClaimsQuery(pathStrings = listOf("given_name")),
+                            ClaimsQuery(pathStrings = listOf("family_name")),
+                            ClaimsQuery(pathStrings = listOf("address", "street_address"))
                         )
                     )
                 )
@@ -419,7 +496,7 @@ object Verifier2OpenApiExamples {
                             typeValues = listOf(listOf("VerifiableCredential", "OpenBadgeCredential"))
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -436,7 +513,7 @@ object Verifier2OpenApiExamples {
                         format = CredentialFormat.JWT_VC_JSON,
                         meta = NoMeta,
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -457,7 +534,7 @@ object Verifier2OpenApiExamples {
                             )
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("credentialSubject", "achievement", "description"))
+                            ClaimsQuery(pathStrings = listOf("credentialSubject", "achievement", "description"))
                         )
                     )
                 )
@@ -478,9 +555,9 @@ object Verifier2OpenApiExamples {
                             )
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("credentialSubject", "achievement", "description")),
-                            ClaimsQuery(path = listOf("credentialSubject", "achievement", "criteria", "type")),
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("credentialSubject", "achievement", "description")),
+                            ClaimsQuery(pathStrings = listOf("credentialSubject", "achievement", "criteria", "type")),
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -501,7 +578,7 @@ object Verifier2OpenApiExamples {
                             )
                         ),
                         claims = listOf(
-                            ClaimsQuery(path = listOf("name"))
+                            ClaimsQuery(pathStrings = listOf("name"))
                         )
                     )
                 )
@@ -541,7 +618,7 @@ object Verifier2OpenApiExamples {
                         ),
                         claims = listOf(
                             ClaimsQuery(
-                                path = listOf("name"),
+                                pathStrings = listOf("name"),
                                 values = listOf(JsonPrimitive("JFF x vc-edu PlugFest 3 Interoperability"))
                             )
                         )
@@ -572,9 +649,9 @@ object Verifier2OpenApiExamples {
         id = "pid", format = CredentialFormat.JWT_VC_JSON, meta = JwtVcJsonMeta(
             typeValues = listOf(listOf("VerifiableCredential", "identity_credential"))
         ), claims = listOf(
-            ClaimsQuery(path = listOf("given_name")),
-            ClaimsQuery(path = listOf("family_name")),
-            ClaimsQuery(path = listOf("address", "street_address"))
+            ClaimsQuery(pathStrings = listOf("given_name")),
+            ClaimsQuery(pathStrings = listOf("family_name")),
+            ClaimsQuery(pathStrings = listOf("address", "street_address"))
         )
     )
 

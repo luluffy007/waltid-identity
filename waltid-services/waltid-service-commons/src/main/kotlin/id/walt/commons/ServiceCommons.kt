@@ -2,7 +2,6 @@ package id.walt.commons
 
 import id.walt.commons.config.ConfigManager
 import id.walt.commons.config.list.DevModeConfig
-import id.walt.commons.config.statics.BuildConfig
 import id.walt.commons.config.statics.ServiceConfig
 import id.walt.commons.config.statics.ServiceConfig.serviceString
 import id.walt.commons.featureflag.AbstractFeature
@@ -39,9 +38,9 @@ private fun defaultLicenseUrl(product: ProductType) = when (product) {
 }
 
 data class ServiceConfiguration(
-    val name: String = "",
+    val name: String,
     val vendor: String = "walt.id",
-    val version: String = BuildConfig.version,
+    val version: String,
     val product: ProductType = ProductType.OPEN_SOURCE,
     val supportUrl: String = defaultSupportUrl(product),
     val licenseName: String = defaultLicenseName(product),
@@ -83,7 +82,7 @@ object ServiceCommons {
             log.info { "Registering service feature catalog..." }
             FeatureManager.registerCatalogs(init.features)
 
-            log.info { "Loading features..." }
+            log.info { "Loading feature amendments..." }
             FeatureManager.load(init.featureAmendments)
         }.also {
             log.info { "Feature initialization completed ($it)." }

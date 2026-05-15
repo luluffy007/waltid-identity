@@ -18,18 +18,27 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Instant
 
 /**
  * Defines all properties common to every flow.
  */
 @Serializable
 data class GeneralFlowConfig(
-    @SerialName("dcql_query") val dcqlQuery: DcqlQuery,
+    @SerialName("dcql_query") val dcqlQuery: DcqlQuery? = null,
 
     @SerialName("signed_request") val signedRequest: Boolean = false,
     @SerialName("encrypted_response") val encryptedResponse: Boolean = false,
 
     val notifications: KtorSessionNotifications? = null,
+
+    /** Expiration duration in ISO-8601 duration format. Used to calculate expiration date. */
+    @SerialName("expiration_duration") val expirationDuration: Duration? = null,
+    /** Expiration date (takes precedence over expiration_duration if both set) */
+    @SerialName("expiration_date") val expirationDate: Instant? =
+        expirationDuration?.let { Clock.System.now().plus(it) },
 
     val policies: DefinedVerificationPolicies = DefinedVerificationPolicies(),
 
@@ -46,7 +55,7 @@ data class GeneralFlowConfig(
 ) {
     init {
         // Verify if DCQL Query is correct
-        dcqlQuery.precheck()
+        dcqlQuery?.precheck()
     }
 }
 
@@ -64,12 +73,25 @@ data class UrlConfig(
 @Serializable
 @JsonClassDiscriminator("flow_type")
 sealed interface VerificationSessionSetup {
-    // Expose the common config for easy, unified access from any flow type.
+    // Expose the common config for easy, unified access from any flow type,
+    // e.g. notifications and policies
     val core: GeneralFlowConfig
 }
 
+/** Flows that use URLs*/
 sealed interface UrlBearingDeviceFlowSetup : VerificationSessionSetup {
     val urlConfig: UrlConfig
+}
+
+@Serializable
+data class OpenId4VPConfig(
+    // List of base64url encoded JSON strings
+    val transactionData: List<String>? = null
+)
+
+/** Allow exposing certain OpenID4VP specific options */
+sealed interface OpenID4VP1FlowSetup : VerificationSessionSetup {
+    val openid: OpenId4VPConfig?
 }
 
 /**
@@ -81,10 +103,11 @@ sealed interface UrlBearingDeviceFlowSetup : VerificationSessionSetup {
 data class CrossDeviceFlowSetup(
     @SerialName("core_flow") override val core: GeneralFlowConfig,
     @SerialName("url_config") override val urlConfig: UrlConfig = UrlConfig(),
+    override val openid: OpenId4VPConfig? = null,
 
     // Properties unique to this flow
     val redirects: Verification2Session.VerificationSessionRedirects? = null // Optional final redirect
-) : UrlBearingDeviceFlowSetup {
+) : UrlBearingDeviceFlowSetup, OpenID4VP1FlowSetup {
     companion object {
 
         private val BASE_EXAMPLE = CrossDeviceFlowSetup(
@@ -124,25 +147,29 @@ data class CrossDeviceFlowSetup(
 @Serializable
 @SerialName("same_device")
 data class SameDeviceFlowSetup(
-    override val core: GeneralFlowConfig, override val urlConfig: UrlConfig,
+    override val core: GeneralFlowConfig,
+    override val urlConfig: UrlConfig,
+    override val openid: OpenId4VPConfig? = null,
 
     // Property unique to this flow
     val redirects: Verification2Session.VerificationSessionRedirects // Required for final redirect
-) : UrlBearingDeviceFlowSetup
+) : UrlBearingDeviceFlowSetup, OpenID4VP1FlowSetup
 
 /**
+ * Annex D
  * Digital Credentials API (Browser/OS native)
  * Can be Standard or HAIP (High Assurance).
  */
 @Serializable
 @SerialName("dc_api")
-data class DcApiFlowSetup(
+data class DcApiAnnexDFlowSetup(
     override val core: GeneralFlowConfig,
+    override val openid: OpenId4VPConfig? = null,
 
     // Properties unique to this flow:
     val expectedOrigins: List<String>,
     val haip: Boolean = false,
-) : VerificationSessionSetup {
+) : VerificationSessionSetup, OpenID4VP1FlowSetup {
     init {
         if (haip) {
             require(core.encryptedResponse) { "To be compliant with profile HAIP, encrypted response must be enabled. Set 'encryptedResponse' to be true (in GeneralFlowConfig)." }
@@ -156,7 +183,7 @@ data class DcApiFlowSetup(
     }
 
     companion object {
-        val EXAMPLE_UNSIGNED_UNENCRYPTED_MDL = DcApiFlowSetup(
+        val EX_UNSIGNED_UNENCRYPTED_MDL = DcApiAnnexDFlowSetup(
             core = GeneralFlowConfig(
                 dcqlQuery = DcqlQuery(
                     credentials = listOf(
@@ -165,9 +192,9 @@ data class DcApiFlowSetup(
                             format = CredentialFormat.MSO_MDOC,
                             meta = MsoMdocMeta(doctypeValue = "org.iso.18013.5.1.mDL"),
                             claims = listOf(
-                                ClaimsQuery(path = listOf("org.iso.18013.5.1", "family_name")),
-                                ClaimsQuery(path = listOf("org.iso.18013.5.1", "given_name")),
-                                ClaimsQuery(path = listOf("org.iso.18013.5.1", "age_over_21"))
+                                ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "family_name")),
+                                ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "given_name")),
+                                ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "age_over_21"))
                             )
                         )
                     )
@@ -181,13 +208,13 @@ data class DcApiFlowSetup(
             expectedOrigins = listOf("https://digital-credentials.walt.id"),
             haip = false
         )
-        val EXAMPLE_UNSIGNED_ENCRYPTED_MDL = EXAMPLE_UNSIGNED_UNENCRYPTED_MDL.copy(
-            core = EXAMPLE_UNSIGNED_UNENCRYPTED_MDL.core.copy(
+        val EXAMPLE_UNSIGNED_ENCRYPTED_MDL = EX_UNSIGNED_UNENCRYPTED_MDL.copy(
+            core = EX_UNSIGNED_UNENCRYPTED_MDL.core.copy(
                 encryptedResponse = true
             )
         )
 
-        val EXAMPLE_SIGNED_MDL = DcApiFlowSetup(
+        val EXAMPLE_SIGNED_MDL = DcApiAnnexDFlowSetup(
             core = GeneralFlowConfig(
                 dcqlQuery = DcqlQuery(
                     credentials = listOf(
@@ -196,9 +223,9 @@ data class DcApiFlowSetup(
                             format = CredentialFormat.MSO_MDOC,
                             meta = MsoMdocMeta(doctypeValue = "org.iso.18013.5.1.mDL"),
                             claims = listOf(
-                                ClaimsQuery(path = listOf("org.iso.18013.5.1", "family_name")),
-                                ClaimsQuery(path = listOf("org.iso.18013.5.1", "given_name")),
-                                ClaimsQuery(path = listOf("org.iso.18013.5.1", "age_over_21"))
+                                ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "family_name")),
+                                ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "given_name")),
+                                ClaimsQuery(pathStrings = listOf("org.iso.18013.5.1", "age_over_21"))
                             )
                         )
                     )
@@ -232,7 +259,7 @@ data class DcApiFlowSetup(
             )
         )
 
-        val EXAMPLE_SIGNED_ENCRYPTED_PHOTOID = EXAMPLE_SIGNED_ENCRYPTED_MDL.copy(
+        val EX_SIGNED_ENCRYPTED_PHOTOID = EXAMPLE_SIGNED_ENCRYPTED_MDL.copy(
             core = EXAMPLE_SIGNED_ENCRYPTED_MDL.core.copy(
                 dcqlQuery = DcqlQuery(
                     credentials = listOf(
@@ -241,7 +268,7 @@ data class DcApiFlowSetup(
                             format = CredentialFormat.MSO_MDOC,
                             meta = MsoMdocMeta(doctypeValue = "org.iso.23220.photoid.1"),
                             claims = listOf(
-                                ClaimsQuery(path = listOf("org.iso.23220.photoid.1", "person_id"))
+                                ClaimsQuery(pathStrings = listOf("org.iso.23220.photoid.1", "person_id"))
                             )
                         )
                     )
@@ -276,7 +303,7 @@ data class DcApiFlowSetup(
                                 "expiry_date",
                                 "issuing_authority",
                                 "issuing_country"
-                            ).map { ClaimsQuery(path = listOf("eu.europa.ec.eudi.pid.1", it)) }
+                            ).map { ClaimsQuery(pathStrings = listOf("eu.europa.ec.eudi.pid.1", it)) }
                         )
                     )
                 ),
@@ -289,6 +316,9 @@ data class DcApiFlowSetup(
     }
 }
 
+typealias AnnexCDocTypeToRequestedElements = Map<String, AnnexCNamespaceRequestedElements>
+typealias AnnexCNamespaceRequestedElements = Map<String, List<String>>
+
 /**
  * ISO 18013-7 Annex C (DC API) flow using the unified /verification-session endpoints.
  */
@@ -296,12 +326,22 @@ data class DcApiFlowSetup(
 @Serializable
 @SerialName("dc_api-annex-c")
 data class DcApiAnnexCFlowSetup(
-    val docType: String,
-    val requestedElements: Map<String, List<String>>,
-    val policies: DefinedVerificationPolicies = DefinedVerificationPolicies(),
+    @SerialName("core_flow") private val coreInput: GeneralFlowConfig? = null,
+    val requestedElements: AnnexCDocTypeToRequestedElements,
     val origin: String,
-    @SerialName("core_flow") override val core: GeneralFlowConfig = buildAnnexCCore(docType, requestedElements, policies)
 ) : VerificationSessionSetup {
+
+    val generatedCore = buildAnnexCCore(requestedElements)
+
+    init {
+        require(coreInput?.dcqlQuery == null || coreInput.dcqlQuery == generatedCore.dcqlQuery) { "Cannot use DCQL query for Annex C!" }
+    }
+
+    override val core: GeneralFlowConfig =
+        coreInput?.copy(
+            dcqlQuery = generatedCore.dcqlQuery
+        ) ?: generatedCore
+
     init {
         val parsedOrigin = UrlUtils.checkDcApiOriginUrl(origin)
         require(parsedOrigin.secureContext) { "Provided origin \"$origin\" is not a secure context. Use of HTTPS is required!" }
@@ -309,128 +349,166 @@ data class DcApiAnnexCFlowSetup(
             "Your provided origin \"$origin\" has a trailing slash ('/' at the end), this will be silently dropped by OS handlers when using DC API. Remove the trailing slash to avoid errors."
         }
 
-        val expectedCore = buildAnnexCCore(docType, requestedElements, policies)
-        require(core.dcqlQuery == expectedCore.dcqlQuery) { "core_flow.dcql_query must match docType/requestedElements" }
-        require(core.policies == expectedCore.policies) { "core_flow.policies must match policies" }
+        coreInput?.dcqlQuery?.let {
+            require(it == core.dcqlQuery) { "core_flow.dcql_query must match docType/requestedElements" }
+        }
+        coreInput?.policies?.let {
+            require(it == core.policies) { "core_flow.policies must match policies" }
+        }
     }
 
     companion object {
         private fun buildAnnexCCore(
-            docType: String, requestedElements: Map<String, List<String>>, policies: DefinedVerificationPolicies
+            namespaceRequestedElements: AnnexCDocTypeToRequestedElements,
         ): GeneralFlowConfig {
-            val claims = requestedElements.entries.sortedBy { it.key }.flatMap { (namespace, elements) ->
-                elements.distinct().sorted().map { elementId ->
-                    ClaimsQuery(path = listOf(namespace, elementId))
-                }
+            val credentials = namespaceRequestedElements.entries
+
+            val dcqlIndividualQueries: List<CredentialQuery> = credentials.map { (docType, requestedElements) ->
+                CredentialQuery(
+                    id = docType,
+                    format = CredentialFormat.MSO_MDOC,
+                    meta = MsoMdocMeta(doctypeValue = docType),
+                    claims = requestedElements.entries.sortedBy { it.key }.flatMap { (namespace, elements) ->
+                        elements.distinct().sorted().map { elementId ->
+                            ClaimsQuery(pathStrings = listOf(namespace, elementId))
+                        }
+                    }
+                )
             }
 
-            val dcqlQuery = DcqlQuery(
-                credentials = listOf(
-                    CredentialQuery(
-                        id = "annex_c", format = CredentialFormat.MSO_MDOC, meta = MsoMdocMeta(doctypeValue = docType), claims = claims
-                    )
-                )
-            )
+            val dcqlQuery = DcqlQuery(credentials = dcqlIndividualQueries)
 
             return GeneralFlowConfig(
-                dcqlQuery = dcqlQuery, policies = policies
+                dcqlQuery = dcqlQuery
             )
         }
 
         val EXTENDED_MDL_EXAMPLE = DcApiAnnexCFlowSetup(
-            docType = "org.iso.18013.5.1.mDL",
             requestedElements = mapOf(
-                "org.iso.18013.5.1" to listOf(
-                    "family_name",
-                    "given_name",
-                    "birth_date",
-                    "issue_date",
-                    "expiry_date",
-                    "issuing_country",
-                    "issuing_authority",
-                    "driving_privileges",
+                "org.iso.18013.5.1.mDL" to mapOf(
+                    "org.iso.18013.5.1" to listOf(
+                        "family_name",
+                        "given_name",
+                        "birth_date",
+                        "issue_date",
+                        "expiry_date",
+                        "issuing_country",
+                        "issuing_authority",
+                        "driving_privileges",
 
-                    "age_birth_year",
-                    "age_over_18",
-                    "age_over_21",
-                    "age_over_65",
+                        "age_birth_year",
+                        "age_over_18",
+                        "age_over_21",
+                        "age_over_65",
 
-                    "issuing_jurisdiction",
-                    "nationality"
+                        "issuing_jurisdiction",
+                        "nationality"
+                    )
                 )
             ),
             origin = "https://digital-credentials.walt.id"
         )
 
         val EXTENDED_PHOTOID_EXAMPLE = DcApiAnnexCFlowSetup(
-            docType = "org.iso.23220.photoid.1",
             requestedElements = mapOf(
-                "org.iso.23220.1" to listOf(
-                    "family_name",
-                    "family_name_viz",
-                    "given_name",
-                    "given_name_viz",
-                    "issue_date",
-                    "expiry_date",
-                    "issuing_authority_unicode",
-                    "issuing_country",
-                    "age_over_18",
-                    "age_over_21",
-                    "age_over_65",
-                    "age_birth_year",
-                    "portrait_capture_date",
-                    "birthplace",
-                    "name_at_birth",
-                    "resident_address",
-                    "resident_city",
-                    "resident_postal_code",
-                    "resident_country",
-                    "resident_city_latin1",
-                    "nationality",
-                    "document_number",
-                    "issuing_subdivision",
-                    "family_name_latin1",
-                    "given_name_latin1"
-                ),
-                "org.iso.23220.photoid.1" to listOf(
-                    "person_id",
-                    "birth_country",
-                    "birth_state",
-                    "birth_city",
-                    "administrative_number",
-                    "resident_street",
-                    "resident_house_number",
-                    "travel_document_type",
-                    "travel_document_number",
-                    "travel_document_mrz",
-                    "resident_state"
+                "org.iso.23220.photoid.1" to mapOf(
+                    "org.iso.23220.1" to listOf(
+                        "family_name",
+                        "family_name_viz",
+                        "given_name",
+                        "given_name_viz",
+                        "issue_date",
+                        "expiry_date",
+                        "issuing_authority_unicode",
+                        "issuing_country",
+                        "age_over_18",
+                        "age_over_21",
+                        "age_over_65",
+                        "age_birth_year",
+                        "portrait_capture_date",
+                        "birthplace",
+                        "name_at_birth",
+                        "resident_address",
+                        "resident_city",
+                        "resident_postal_code",
+                        "resident_country",
+                        "resident_city_latin1",
+                        "nationality",
+                        "document_number",
+                        "issuing_subdivision",
+                        "family_name_latin1",
+                        "given_name_latin1"
+                    ),
+                    "org.iso.23220.photoid.1" to listOf(
+                        "person_id",
+                        "birth_country",
+                        "birth_state",
+                        "birth_city",
+                        "administrative_number",
+                        "resident_street",
+                        "resident_house_number",
+                        "travel_document_type",
+                        "travel_document_number",
+                        "travel_document_mrz",
+                        "resident_state"
+                    )
                 )
             ),
             origin = "https://digital-credentials.walt.id",
         )
 
         val EXTENDED_PID_EXAMPLE = DcApiAnnexCFlowSetup(
-            docType = "eu.europa.ec.eudi.pid.1",
             requestedElements = mapOf(
-                "eu.europa.ec.eudi.pid.1" to listOf(
-                    "family_name",
-                    "given_name",
-                    "birth_date",
-                    "age_birth_year",
-                    "age_over_18",
-                    "age_over_21",
-                    "age_over_65",
-                    "family_name_birth",
-                    "given_name_birth",
-                    "birth_place",
-                    "birth_country",
-                    "issuance_date",
-                    "expiry_date",
-                    "issuing_authority",
-                    "issuing_country"
+                "eu.europa.ec.eudi.pid.1" to mapOf(
+                    "eu.europa.ec.eudi.pid.1" to listOf(
+                        "family_name",
+                        "given_name",
+                        "birth_date",
+                        "age_birth_year",
+                        "age_over_18",
+                        "age_over_21",
+                        "age_over_65",
+                        "family_name_birth",
+                        "given_name_birth",
+                        "birth_place",
+                        "birth_country",
+                        "issuance_date",
+                        "expiry_date",
+                        "issuing_authority",
+                        "issuing_country"
+                    )
                 )
             ),
             origin = "https://digital-credentials.walt.id",
+        )
+
+        val MULTI_CREDENTIAL_EXAMPLE = DcApiAnnexCFlowSetup(
+            requestedElements = EXTENDED_MDL_EXAMPLE.requestedElements + EXTENDED_PHOTOID_EXAMPLE.requestedElements,
+            origin = "https://digital-credentials.walt.id",
+        )
+
+        val SIGNED_MDL_EXAMPLE = EXTENDED_MDL_EXAMPLE.copy(
+            coreInput = GeneralFlowConfig(
+
+                signedRequest = true,
+                encryptedResponse = false,
+                clientId = "x509_hash:1i4VjAVXdxwhPVuPM19mNtMpWJhQ",
+                x5c = listOf(
+                    "MIIBsTCCAVegAwIBAgIUJklaRrIjkEZlDdPk2+qPneHHD6kwCgYIKoZIzj0EAwIwLjEQMA4GA1UEAwwHRXhhbXBsZTENMAsGA1UECgwEVGVzdDELMAkGA1UEBhMCVVMwHhcNMjYwMzMxMDkwNDMwWhcNMjcwMzMxMDkwNDMwWjAuMRAwDgYDVQQDDAdFeGFtcGxlMQ0wCwYDVQQKDARUZXN0MQswCQYDVQQGEwJVUzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM4ukI9BoHfMYjKmokWc5GMiN7DJBQAPPZBHXHhwmuQE+JyeRcamM+uCS1N+naE0itVbs7fQ/5xbujSSK9pYdb6jUzBRMB0GA1UdDgQWBBSwjqgulcWH4AqTJwPjBGj3VGIAsTAfBgNVHSMEGDAWgBSwjqgulcWH4AqTJwPjBGj3VGIAsTAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCoWAleGRqR+kb+5SeRt/scogZPiQiM7wJ69tadEPPJwQIgdygIZSMQSXlxXbZ10QKtN6qSjggqFVUV4/Z2/pnBUBk="
+                ),
+
+                key = DirectSerializedKey(
+                    KeyManager.resolveSerializedKeyBlocking(
+                        """{"type":"jwk","jwk":{
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "zi6Qj0Ggd8xiMqaiRZzkYyI3sMkFAA89kEdceHCa5AQ",
+                    "y": "-JyeRcamM-uCS1N-naE0itVbs7fQ_5xbujSSK9pYdb4",
+                    "d": "1xgojLKBT4hmuTjgjhz0l6RTHgmlLlVb5bnwuZkNBaA"
+                  }}"""
+                    )
+                )
+            )
         )
     }
 }
